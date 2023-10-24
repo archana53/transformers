@@ -568,7 +568,7 @@ class LongDocumentCrossAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
+        layer_head_mask: Optional[torch.FloatTensor] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
@@ -671,8 +671,8 @@ class LongDocumentCrossAttention(nn.Module):
         attention_probs = self.dropout(attention_probs)
 
         # Mask heads if we want to
-        if head_mask is not None:
-            attention_probs = attention_probs * head_mask
+        if layer_head_mask is not None:
+            attention_probs = attention_probs * layer_head_mask
 
         context_layer = torch.matmul(attention_probs, value_layer)
 
@@ -1535,11 +1535,12 @@ class LongformerAttention(nn.Module):
             output_attentions=output_attentions,
         )
 
-        attn_output = self.self_output(self_outputs[0], hidden_states)
+        attn_output = self.output(self_outputs[0], hidden_states)
         outputs = (attn_output,) + self_outputs[1:]
 
         if self.cross_attn:
             cross_outputs = self.cross(
+                hidden_states=attn_output,
                 hidden_states=outputs,
                 attention_mask=attention_mask,
                 layer_head_mask=layer_head_mask,
@@ -1547,7 +1548,7 @@ class LongformerAttention(nn.Module):
                 encoder_attention_mask=cross_attn_attention_masks,
                 output_attentions=output_attentions,
             )
-            attn_output = self.cross_output(cross_outputs[0], outputs)
+            attn_output = self.cross_output(cross_outputs[0], attn_output)
             outputs = (attn_output,) + outputs[1:]
 
         return outputs
