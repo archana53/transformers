@@ -913,17 +913,17 @@ class LongDocumentCrossAttention(nn.Module):
 
 
 class LEDEncoderAttention(nn.Module):
-    def __init__(self, config, layer_id, cross_modality=False):
+    def __init__(self, config, layer_id, cross_attn=False):
         super().__init__()
         self.longformer_self_attn = LEDEncoderSelfAttention(config, layer_id=layer_id)
         self.output = nn.Linear(config.d_model, config.d_model)
-        self.cross_modality = cross_modality
+        self.cross_attn = cross_attn
 
         # note: Longformer model implements layer norm inside LongformerSelfOutput but LED does not
         # instead, LED implements layer norm in LEDEncoderLayer
-        # so we need to add layer norm here if cross_modality is enabled
+        # so we need to add layer norm here if cross_attn is enabled
         # borrowing the code from LongformerSelfOutput
-        if cross_modality:
+        if cross_attn:
             self.self_output = LongformerSelfOutput(config)
             self.cross = LongDocumentCrossAttention(config, layer_id, position_embedding_type='')
             self.cross_output = nn.Linear(config.d_model, config.d_model)
@@ -937,8 +937,8 @@ class LEDEncoderAttention(nn.Module):
         is_index_global_attn: Optional[torch.Tensor] = None,
         is_global_attn: Optional[bool] = None,
         output_attentions: bool = False,
-        cross_modality_inputs = None,
-        cross_modality_attention_masks = None
+        cross_attn_inputs = None,
+        cross_attn_attention_masks = None
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -955,15 +955,15 @@ class LEDEncoderAttention(nn.Module):
         attn_output = self.output(self_outputs[0])
         outputs = (attn_output,) + self_outputs[1:]
 
-        if self.cross_modality:
+        if self.cross_attn:
             attn_output = self.self_output(attn_output, hidden_states)
             cross_outputs = self.cross(
                 hidden_states=attn_output,
                 attention_mask=attention_mask,
                 layer_head_mask=layer_head_mask,
                 output_attentions=output_attentions,
-                encoder_hidden_states=cross_modality_inputs,
-                encoder_attention_mask=cross_modality_attention_masks,
+                encoder_hidden_states=cross_attn_inputs,
+                encoder_attention_mask=cross_attn_attention_masks,
             )
             cross_output = self.cross_output(cross_outputs[0])
             outputs = (cross_output,) + outputs[1:]
@@ -1115,10 +1115,10 @@ class LEDDecoderAttention(nn.Module):
 
 
 class LEDEncoderLayer(nn.Module):
-    def __init__(self, config: LEDConfig, layer_id: int, cross_modality=False):
+    def __init__(self, config: LEDConfig, layer_id: int, cross_attn=False):
         super().__init__()
         self.embed_dim = config.d_model
-        self.self_attn = LEDEncoderAttention(config, layer_id, cross_modality=cross_modality)
+        self.self_attn = LEDEncoderAttention(config, layer_id, cross_attn=cross_attn)
         self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
         self.dropout = config.dropout
         self.activation_fn = ACT2FN[config.activation_function]
@@ -1136,8 +1136,8 @@ class LEDEncoderLayer(nn.Module):
         is_index_global_attn=None,
         is_global_attn=None,
         output_attentions=False,
-        cross_modality_inputs = None,
-        cross_modality_attention_masks = None
+        cross_attn_inputs = None,
+        cross_attn_attention_masks = None
     ):
         """
         Args:
@@ -1156,8 +1156,8 @@ class LEDEncoderLayer(nn.Module):
             is_index_global_attn=is_index_global_attn,
             is_global_attn=is_global_attn,
             output_attentions=output_attentions,
-            cross_modality_inputs = cross_modality_inputs,
-            cross_modality_attention_masks = cross_modality_attention_masks
+            cross_attn_inputs=cross_attn_inputs,
+            cross_attn_attention_masks=cross_attn_attention_masks
         )
         hidden_states = attn_outputs[0]
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -1832,7 +1832,7 @@ class LEDEncoder(LEDPreTrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: LEDConfig, embed_tokens: Optional[nn.Embedding] = None, cross_modality=False):
+    def __init__(self, config: LEDConfig, embed_tokens: Optional[nn.Embedding] = None, cross_attn=False):
         super().__init__(config)
 
         self.dropout = config.dropout
@@ -1864,7 +1864,7 @@ class LEDEncoder(LEDPreTrainedModel):
             self.max_source_positions,
             embed_dim,
         )
-        self.layers = nn.ModuleList([LEDEncoderLayer(config, i, cross_modality=cross_modality) for i in range(config.encoder_layers)])
+        self.layers = nn.ModuleList([LEDEncoderLayer(config, i, cross_attn=cross_attn) for i in range(config.encoder_layers)])
         self.layernorm_embedding = nn.LayerNorm(embed_dim)
 
         self.gradient_checkpointing = False
@@ -1936,8 +1936,8 @@ class LEDEncoder(LEDPreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
-        cross_modality_inputs = None,
-        cross_modality_attention_masks = None
+        cross_attn_inputs = None,
+        cross_attn_attention_masks = None
     ):
         r"""
         Args:
@@ -2083,8 +2083,8 @@ class LEDEncoder(LEDPreTrainedModel):
                         is_index_global_attn=is_index_global_attn,
                         is_global_attn=is_global_attn,
                         output_attentions=output_attentions,
-                        cross_modality_inputs=cross_modality_inputs,
-                        cross_modality_attention_masks=cross_modality_attention_masks
+                        cross_attn_inputs=cross_attn_inputs,
+                        cross_attn_attention_masks=cross_attn_attention_masks
                     )
                 hidden_states = layer_outputs[0]
 
@@ -2396,13 +2396,13 @@ class LEDDecoder(LEDPreTrainedModel):
 class LEDModel(LEDPreTrainedModel):
     _tied_weights_keys = ["decoder.embed_tokens.weight", "encoder.embed_tokens.weight"]
 
-    def __init__(self, config: LEDConfig, cross_modality_encoder=False):
+    def __init__(self, config: LEDConfig, cross_attn_encoder=False):
         super().__init__(config)
 
         padding_idx, vocab_size = config.pad_token_id, config.vocab_size
         self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
 
-        self.encoder = LEDEncoder(config, self.shared, cross_modality=cross_modality_encoder)
+        self.encoder = LEDEncoder(config, self.shared, cross_attn=cross_attn_encoder)
         self.decoder = LEDDecoder(config, self.shared)
 
         # Initialize weights and apply final processing
@@ -2446,8 +2446,8 @@ class LEDModel(LEDPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        encoder_cross_modality_inputs: Optional[torch.Tensor] = None,
-        encoder_cross_modality_attention_masks : Optional[torch.Tensor] = None
+        encoder_cross_attn_inputs: Optional[torch.Tensor] = None,
+        encoder_cross_attn_attention_masks : Optional[torch.Tensor] = None
     ) -> Union[Tuple[torch.Tensor], LEDSeq2SeqModelOutput]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -2474,8 +2474,8 @@ class LEDModel(LEDPreTrainedModel):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
-                cross_modality_inputs=encoder_cross_modality_inputs,
-                cross_modality_attention_masks=encoder_cross_modality_attention_masks
+                cross_attn_inputs=encoder_cross_attn_inputs,
+                cross_attn_attention_masks=encoder_cross_attn_attention_masks
             )
         # If the user passed a tuple for encoder_outputs, we wrap it in a LEDEncoderBaseModelOutput when return_dict=False
         elif return_dict and not isinstance(encoder_outputs, LEDEncoderBaseModelOutput):
@@ -2526,9 +2526,9 @@ class LEDForConditionalGeneration(LEDPreTrainedModel):
     _keys_to_ignore_on_load_missing = ["final_logits_bias"]
     _tied_weights_keys = ["decoder.embed_tokens.weight", "encoder.embed_tokens.weight", "lm_head.weight"]
 
-    def __init__(self, config: LEDConfig, cross_modality_encoder=False):
+    def __init__(self, config: LEDConfig, cross_attn_encoder=False):
         super().__init__(config)
-        self.led = LEDModel(config, cross_modality_encoder=cross_modality_encoder)
+        self.led = LEDModel(config, cross_attn_encoder=cross_attn_encoder)
         self.register_buffer("final_logits_bias", torch.zeros((1, self.led.shared.num_embeddings)))
         self.lm_head = nn.Linear(config.d_model, self.led.shared.num_embeddings, bias=False)
 
@@ -2583,8 +2583,8 @@ class LEDForConditionalGeneration(LEDPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        encoder_cross_modality_inputs: Optional[torch.Tensor] = None,
-        encoder_cross_modality_attention_masks : Optional[torch.Tensor] = None
+        encoder_cross_attn_inputs: Optional[torch.Tensor] = None,
+        encoder_cross_attn_attention_masks : Optional[torch.Tensor] = None
 
     ) -> Union[Tuple[torch.Tensor], LEDSeq2SeqLMOutput]:
         r"""
@@ -2637,8 +2637,8 @@ class LEDForConditionalGeneration(LEDPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            encoder_cross_modality_inputs=encoder_cross_modality_inputs,
-            encoder_cross_modality_attention_masks=encoder_cross_modality_attention_masks
+            encoder_cross_attn_inputs=encoder_cross_attn_inputs,
+            encoder_cross_attn_attention_masks=encoder_cross_attn_attention_masks
         )
         lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
 
